@@ -163,15 +163,24 @@ class HTTPMCPClient:
 
     Same surface as MCPClient (initialize/list_tools/call_tool) so the test
     bodies don't need to change between modes.
+
+    The MCP endpoint is at /mcp/<MCP_API_KEY>/<server>/mcp on the deployed
+    instance — the API key is a URL secret, not a header. (Claude Custom
+    Connectors don't support arbitrary auth headers, so we use a capability
+    URL instead.) When MCP_API_KEY is unset, we fall back to /mcp/<server>/mcp
+    for local-dev parity.
     """
 
-    def __init__(self, mount_path: str):
-        # mount_path is "/mcp/logger" or "/mcp/analytics" — the streamable_http
-        # endpoint inside that mount lives at "{mount}/mcp"
-        self.endpoint = f"{API_BASE_URL}{mount_path}/mcp"
+    def __init__(self, server_name: str):
+        # server_name is "logger" or "analytics"
+        if MCP_API_KEY:
+            mount = f"/mcp/{MCP_API_KEY}/{server_name}"
+        else:
+            mount = f"/mcp/{server_name}"
+        self.endpoint = f"{API_BASE_URL}{mount}/mcp"
         self._next_id = 1
         self._client = None
-        self.label = mount_path
+        self.label = mount
 
     async def start(self) -> None:
         import httpx
@@ -180,8 +189,7 @@ class HTTPMCPClient:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
-        if MCP_API_KEY:
-            headers["Authorization"] = f"Bearer {MCP_API_KEY}"
+        # No Authorization header — MCP endpoints are URL-secret protected.
         self._client = httpx.AsyncClient(timeout=30.0, headers=headers)
 
     async def stop(self) -> None:
@@ -244,7 +252,7 @@ def extract_text(call_result: dict) -> str:
 async def test_logger_server() -> bool:
     section("LOGGER SERVER TEST")
     if TEST_MODE == "http":
-        client = HTTPMCPClient("/mcp/logger")
+        client = HTTPMCPClient("logger")
         all_passed = True
         info(f"HTTP mode → {client.endpoint}")
     else:
@@ -318,7 +326,7 @@ async def test_logger_server() -> bool:
 async def test_analytics_server() -> bool:
     section("ANALYTICS SERVER TEST")
     if TEST_MODE == "http":
-        client = HTTPMCPClient("/mcp/analytics")
+        client = HTTPMCPClient("analytics")
         all_passed = True
         info(f"HTTP mode → {client.endpoint}")
     else:

@@ -61,6 +61,13 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/docs/") or path.startswith("/static/"):
             return await call_next(request)
 
+        # Skip auth for MCP HTTP endpoints — they're protected by a URL-secret
+        # capability path (/mcp/<key>/...) instead of bearer auth, because
+        # Claude Custom Connectors don't support arbitrary auth headers.
+        # Anyone hitting the wrong path gets a 404 from Starlette's router.
+        if path.startswith("/mcp/"):
+            return await call_next(request)
+
         # Check Authorization header
         auth_header = request.headers.get("authorization", "")
         if not auth_header.lower().startswith("bearer "):

@@ -24,6 +24,25 @@ _logger_mcp_app = get_logger_app()
 _analytics_mcp_app = get_analytics_app()
 
 
+# Mount the MCP HTTP apps under a path that includes MCP_API_KEY as a secret
+# segment. Anyone hitting /mcp/<wrong-or-missing-secret>/... gets a 404 from
+# Starlette's router. This is a "capability URL" — same security model as a
+# Slack incoming webhook URL.
+#
+# We use the URL-secret approach because Claude's Custom Connector UI only
+# supports OAuth 2.0 (not arbitrary bearer tokens), and OAuth would be
+# overkill for a personal tool.
+#
+# When MCP_API_KEY is unset (local dev), we fall back to the un-prefixed
+# /mcp/logger and /mcp/analytics paths so the local stdio integration test
+# and Claude Desktop config keep working unchanged.
+def _mcp_mount_paths() -> tuple[str, str]:
+    if settings.MCP_API_KEY:
+        secret = settings.MCP_API_KEY
+        return f"/mcp/{secret}/logger", f"/mcp/{secret}/analytics"
+    return "/mcp/logger", "/mcp/analytics"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Athlete Training API...")
@@ -33,12 +52,17 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("API ready — local database at %s", settings.DB_PATH)
 
+    logger_mount, analytics_mount = _mcp_mount_paths()
+
     # Mounted Starlette sub-apps don't get their lifespan run automatically.
     # Enter both MCP app lifespans manually so the session managers start.
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(_logger_mcp_app.router.lifespan_context(_logger_mcp_app))
         await stack.enter_async_context(_analytics_mcp_app.router.lifespan_context(_analytics_mcp_app))
-        logger.info("MCP HTTP transports ready at /mcp/logger and /mcp/analytics")
+        if settings.MCP_API_KEY:
+            logger.info("MCP HTTP transports ready (paths obscured by URL secret)")
+        else:
+            logger.info("MCP HTTP transports ready at /mcp/logger and /mcp/analytics")
         yield
 
     await close_db()
@@ -53,7 +77,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Auth middleware MUST be added before CORS so OPTIONS preflights bypass it.
+    # CORS first so its OPTIONS preflight responses bypass auth.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -61,6 +85,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Bearer auth on the REST API endpoints. The middleware skips /mcp/* paths
+    # entirely — those are protected by the URL-secret mount above.
     app.add_middleware(
         BearerAuthMiddleware,
         api_key=settings.MCP_API_KEY,
@@ -73,11 +99,10 @@ def create_app() -> FastAPI:
     app.include_router(sets.router, prefix="/sets", tags=["sets"])
     app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 
-    # MCP HTTP endpoints — Claude Desktop / Custom Connectors will hit these.
-    # The auth middleware above runs before the mount, so MCP requests
-    # require Authorization: Bearer <MCP_API_KEY> just like the REST API.
-    app.mount("/mcp/logger", _logger_mcp_app)
-    app.mount("/mcp/analytics", _analytics_mcp_app)
+    # MCP HTTP endpoints — Claude Custom Connectors will hit these.
+    logger_mount, analytics_mount = _mcp_mount_paths()
+    app.mount(logger_mount, _logger_mcp_app)
+    app.mount(analytics_mount, _analytics_mcp_app)
 
     return app
 
