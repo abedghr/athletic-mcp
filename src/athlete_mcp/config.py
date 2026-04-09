@@ -17,8 +17,17 @@ class Settings:
 
     # API
     API_HOST: str = os.getenv("ATHLETE_API_HOST", "0.0.0.0")
-    API_PORT: int = int(os.getenv("ATHLETE_API_PORT", "8000"))
-    API_BASE_URL: str = os.getenv("ATHLETE_API_BASE_URL", "http://localhost:8000")
+    # Hosts like Render inject PORT — prefer it over our default for the
+    # in-process loopback URL the MCP tools use. ATHLETE_API_PORT can still
+    # override if explicitly set.
+    API_PORT: int = int(os.getenv("ATHLETE_API_PORT") or os.getenv("PORT") or "8000")
+    # Loopback URL the MCP tools call. Defaults to localhost on whichever port
+    # the API is actually bound to. Override with ATHLETE_API_BASE_URL only if
+    # the MCP tools should reach the API over a different network.
+    API_BASE_URL: str = os.getenv(
+        "ATHLETE_API_BASE_URL",
+        f"http://localhost:{int(os.getenv('ATHLETE_API_PORT') or os.getenv('PORT') or '8000')}",
+    )
 
     # Auth — required for remote deploys, optional for local
     MCP_API_KEY: str | None = os.getenv("MCP_API_KEY")
