@@ -1,175 +1,115 @@
 # Athletic Training MCP System
 
-A production-grade athletic training tracker exposed as two MCP servers backed by a FastAPI + SQLite API.
+A personal athletic performance tracker exposed to Claude as two MCP servers, backed by a FastAPI + Turso (cloud SQLite) API. Deployed on Render. Works from Claude desktop, web, and mobile via Custom Connectors.
 
-Designed for serious athletes — calisthenics, barbell, cardio, anything. The exercise catalog is fully dynamic.
+Designed for any sport — calisthenics, barbell, cardio. The exercise catalog is fully dynamic.
 
-## Architecture
+## Quick links
+
+- **Deployed URL:** `https://athlete-mcp.onrender.com` (replace with yours)
+- **Architecture, API reference, DB schema:** see [DOCS.md](DOCS.md)
+- **System prompt for Claude:** see [CLAUDE_SYSTEM_PROMPT.md](CLAUDE_SYSTEM_PROMPT.md)
+
+## Architecture (one-line)
 
 ```
-Claude Desktop
-    │
-    ├── MCP stdio → athlete-logger     ─────┐
-    │                                        ├──► FastAPI (localhost:8000) ──► SQLite (WAL)
-    └── MCP stdio → athlete-analytics  ─────┘
+Claude (web/mobile/desktop) ──HTTPS──► Render (FastAPI + MCP-over-HTTP) ──libsql──► Turso
 ```
 
-- **FastAPI** owns all business logic, validation, and DB access
-- **MCP servers** are thin HTTP adapters — each tool calls the API via httpx
-- **SQLite** with WAL mode, foreign keys, soft deletes
-- The API is independently usable (curl, scripts, future UIs)
+Single Python process:
+- **FastAPI REST API** — `/exercises`, `/workouts`, `/sets`, `/analytics` (bearer-auth protected)
+- **Two mounted MCP HTTP servers** — `/mcp/{secret}/logger/mcp` and `/mcp/{secret}/analytics/mcp` (URL-secret protected)
+- **18 MCP tools total** (10 logger + 8 analytics) — expose the REST API to Claude
 
 ## Prerequisites
 
 - Python 3.11+
-- pip
+- A [Turso](https://turso.tech) account (free)
+- A [Render](https://render.com) account (free)
+- Claude **Pro** (or higher) — required for Custom Connectors
+- Docker (optional, for local container testing)
 
-## Installation
+## Local development
 
 ```bash
-git clone <this repo>
-cd athletic
+# Install
 pip install -e .
 
-# Optional: configure env vars
-cp .env.example .env
-# Edit .env to set ATHLETE_DB_PATH, DEFAULT_BODYWEIGHT_KG, etc.
-```
+# Set env vars (or create a .env from .env.example)
+export TURSO_DATABASE_URL=libsql://your-db.turso.io
+export TURSO_AUTH_TOKEN=eyJ...
+export MCP_API_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 
-## Running the System
-
-You need three terminals running simultaneously.
-
-**Terminal 1 — FastAPI server (must be started first):**
-```bash
+# Run the API (also serves the MCP HTTP endpoints)
 python scripts/run_api.py
-```
-This creates the SQLite DB, runs migrations, seeds default exercises.
-Visit http://localhost:8000/docs for the Swagger UI.
 
-**Terminal 2 — Logger MCP server:**
-```bash
-python scripts/run_logger.py
+# Run the integration test against your local instance
+MCP_TEST_MODE=http MCP_API_KEY=$MCP_API_KEY python3 scripts/test_mcp_integration.py
 ```
 
-**Terminal 3 — Analytics MCP server:**
-```bash
-python scripts/run_analytics.py
-```
+The API will be at `http://localhost:8000`. Swagger UI at `http://localhost:8000/docs`.
 
-## Claude Desktop Setup
+## Deploy to Render
 
-1. Open your Claude Desktop config:
-   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+1. Push this repo to GitHub
+2. In Render → **New → Blueprint** → connect your fork
+3. Render reads `render.yaml` and creates the service
+4. Set 3 secret env vars in the Render dashboard:
+   - `TURSO_DATABASE_URL` — from Turso dashboard
+   - `TURSO_AUTH_TOKEN` — from Turso dashboard
+   - `MCP_API_KEY` — generate with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`
+5. Wait for the build (~2 min). When you see `Application startup complete` in the logs, you're live.
 
-2. Merge the contents of `claude_desktop_config_snippet.json` into your config, updating the `cwd` path to the absolute path of this project.
+## Connect to Claude
 
-3. **Important:** Start the FastAPI server (`python scripts/run_api.py`) **before** opening Claude Desktop. Otherwise the MCP tools will return `API_UNAVAILABLE` errors.
+In Claude → **Settings → Connectors → Add custom connector** (twice):
 
-4. Restart Claude Desktop. You should see the `athlete-logger` and `athlete-analytics` tools available.
+| Name | Remote MCP server URL |
+|---|---|
+| Athlete Logger | `https://YOUR-APP.onrender.com/mcp/YOUR-MCP-API-KEY/logger/mcp` |
+| Athlete Analytics | `https://YOUR-APP.onrender.com/mcp/YOUR-MCP-API-KEY/analytics/mcp` |
 
-## Example Conversations
+Leave OAuth fields blank. The API key is in the URL itself (capability URL pattern).
 
-Once configured, you can talk to Claude naturally:
+⚠️ **Treat the full URL as a password.** Anyone with it can write to your training database. Rotate `MCP_API_KEY` in Render env vars if you ever leak the URL.
 
-> "Start today's workout, I weigh 82kg today"
-> → calls `tool_start_workout(bodyweight_kg=82)`
+## Test it
 
-> "Log 10 pull ups with 5kg added weight"
-> → calls `tool_log_set(exercise="pull ups", reps=10, added_weight_kg=5)`
+In any Claude chat (web, desktop, or mobile):
 
-> "Log a 45 second L-sit"
-> → calls `tool_log_set(exercise="l sit", duration_secs=45)`
+> log 5 pull ups with 3kg added weight
 
-> "What are my PRs?"
-> → calls `tool_get_prs()`
+Claude calls `tool_log_set` and confirms. Open the Turso dashboard to see the row in real time.
 
-> "How did this week compare to last week?"
-> → calls `tool_weekly_summary()`
+> what's my pull up PR?
 
-> "Am I plateauing on anything?"
-> → calls `tool_detect_plateau()`
+Claude calls `tool_get_prs("pull_up")` and tells you.
 
-> "Show me my pull up progression over the last 3 months"
-> → calls `tool_exercise_history(exercise="pull up", limit=50)`
+## Local stdio mode (optional, fallback)
 
-## Adding a New Exercise
+If you want to run everything locally without going through the cloud — useful for development or air-gapped use — see [DOCS.md](DOCS.md#local-stdio-mode) for how to configure Claude Desktop with the `mcpServers` block.
 
-You can add exercises two ways:
-
-**Via Claude:**
-> "Add a new exercise called human flag, it's a core exercise, isometric, tracked by duration, no external weight"
-
-**Directly via API:**
-```bash
-curl -X POST http://localhost:8000/exercises \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "human_flag",
-    "display_name": "Human Flag",
-    "category": "core",
-    "tracking_type": "duration",
-    "is_weighted": false,
-    "equipment": "bar"
-  }'
-```
-
-## Database Location
-
-By default, the SQLite database lives at `~/.athlete/training.db`. Override with the `ATHLETE_DB_PATH` environment variable.
-
-**Backup:** just copy the file.
-```bash
-cp ~/.athlete/training.db ~/.athlete/training.db.backup
-```
-
-## FastAPI Interactive Docs
-
-Visit http://localhost:8000/docs for the Swagger UI with every endpoint documented and testable in-browser.
-
-## Troubleshooting
-
-**MCP tools return `API_UNAVAILABLE`:**
-The FastAPI server isn't running. Start it with `python scripts/run_api.py` before using Claude Desktop.
-
-**Exercise not found:**
-The tool response will include suggestions — try one of those, or add the exercise first with `tool_add_exercise`.
-
-**Database locked:**
-SQLite WAL mode should prevent most locks, but if it happens, ensure only one FastAPI instance is running. Check with `lsof ~/.athlete/training.db`.
-
-**Tools don't appear in Claude Desktop:**
-Check the logs — Claude Desktop shows MCP server stderr in its developer console. Common issues: wrong `cwd` path, missing dependencies, Python version mismatch.
-
-## Project Structure
+## Project layout
 
 ```
 athletic/
+├── README.md                      ← you are here
+├── DOCS.md                        ← architecture, API reference, schema
+├── CLAUDE_SYSTEM_PROMPT.md        ← paste into Claude custom instructions
 ├── pyproject.toml
-├── README.md
+├── Dockerfile                     ← for Render
+├── render.yaml                    ← Render blueprint
 ├── .env.example
-├── claude_desktop_config_snippet.json
+├── claude_desktop_config_snippet.json   ← optional local stdio template
 ├── src/athlete_mcp/
-│   ├── config.py
-│   ├── database/
-│   │   ├── connection.py
-│   │   ├── migrations.py
-│   │   └── models.py
-│   ├── api/
-│   │   ├── main.py
-│   │   ├── dependencies.py
-│   │   ├── routers/       # health, exercises, workouts, sets, analytics
-│   │   └── schemas/       # Pydantic request/response models
-│   ├── servers/
-│   │   ├── logger_server.py
-│   │   └── analytics_server.py
-│   └── tools/
-│       ├── shared.py      # httpx client, safe_api_call, fuzzy helpers
-│       ├── logger_tools.py
-│       └── analytics_tools.py
+│   ├── config.py                  ← env-driven settings
+│   ├── database/                  ← libsql connection + schema
+│   ├── api/                       ← FastAPI app, routers, schemas, auth
+│   ├── servers/                   ← FastMCP servers (logger + analytics)
+│   └── tools/                     ← MCP tool implementations + httpx client
 └── scripts/
-    ├── run_api.py
-    ├── run_logger.py
-    └── run_analytics.py
+    ├── run_api.py                 ← start the FastAPI/MCP server
+    ├── run_logger.py              ← stdio MCP logger (local only)
+    ├── run_analytics.py           ← stdio MCP analytics (local only)
+    └── test_mcp_integration.py    ← end-to-end test (stdio + http modes)
 ```

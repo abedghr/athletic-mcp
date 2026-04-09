@@ -32,13 +32,6 @@ class Settings:
     # Auth — required for remote deploys, optional for local
     MCP_API_KEY: str | None = os.getenv("MCP_API_KEY")
 
-    # Athlete profile
-    DEFAULT_BODYWEIGHT_KG: float | None = (
-        float(os.getenv("DEFAULT_BODYWEIGHT_KG"))
-        if os.getenv("DEFAULT_BODYWEIGHT_KG")
-        else None
-    )
-    ATHLETE_NAME: str = os.getenv("ATHLETE_NAME", "Athlete")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     @property

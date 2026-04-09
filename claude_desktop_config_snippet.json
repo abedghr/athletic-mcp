@@ -1,24 +1,23 @@
 {
+  "_comment": "Optional — only needed if you want LOCAL stdio mode in Claude Desktop. The cloud deployment via Custom Connectors at claude.ai is the recommended path and works on all clients including mobile. Replace ABSOLUTE/PATH with your actual project path.",
   "mcpServers": {
     "athlete-logger": {
       "command": "/usr/local/bin/python3",
       "args": [
-        "/Users/abedulrahman/Public/projects/mcp/athletic/scripts/run_logger.py"
+        "/ABSOLUTE/PATH/TO/athletic/scripts/run_logger.py"
       ],
       "env": {
         "ATHLETE_API_BASE_URL": "http://localhost:8000",
-        "ATHLETE_DB_PATH": "/Users/abedulrahman/.athlete/training.db",
         "LOG_LEVEL": "WARNING"
       }
     },
     "athlete-analytics": {
       "command": "/usr/local/bin/python3",
       "args": [
-        "/Users/abedulrahman/Public/projects/mcp/athletic/scripts/run_analytics.py"
+        "/ABSOLUTE/PATH/TO/athletic/scripts/run_analytics.py"
       ],
       "env": {
         "ATHLETE_API_BASE_URL": "http://localhost:8000",
-        "ATHLETE_DB_PATH": "/Users/abedulrahman/.athlete/training.db",
         "LOG_LEVEL": "WARNING"
       }
     }

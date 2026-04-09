@@ -25,14 +25,6 @@ CREATE TABLE IF NOT EXISTS exercises (
     deleted_at      TIMESTAMP NULL
 );
 
-CREATE TABLE IF NOT EXISTS athlete_profile (
-    id              INTEGER PRIMARY KEY DEFAULT 1,
-    name            TEXT,
-    sport           TEXT,
-    bodyweight_kg   REAL,
-    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS workouts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     date            TEXT NOT NULL,
