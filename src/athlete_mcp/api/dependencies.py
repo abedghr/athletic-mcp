@@ -1,16 +1,15 @@
 import difflib
 import re
-from typing import Annotated
+from typing import Annotated, Any
 
-import aiosqlite
 from fastapi import Depends, HTTPException
 
-from athlete_mcp.database.connection import get_db
+from athlete_mcp.database.connection import Database, get_db
 
-DbDep = Annotated[aiosqlite.Connection, Depends(get_db)]
+DbDep = Annotated[Database, Depends(get_db)]
 
 
-async def resolve_exercise(query: str, db: aiosqlite.Connection) -> aiosqlite.Row:
+async def resolve_exercise(query: str, db: Database) -> Any:
     """Resolve a flexible exercise query to an exact exercise row.
 
     Resolution order:
