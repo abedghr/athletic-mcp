@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "athlete-logger": {
+      "command": "/usr/local/bin/python3",
+      "args": [
+        "/Users/abedulrahman/Public/projects/mcp/athletic/scripts/run_logger.py"
+      ],
+      "env": {
+        "ATHLETE_API_BASE_URL": "http://localhost:8000",
+        "ATHLETE_DB_PATH": "/Users/abedulrahman/.athlete/training.db",
+        "LOG_LEVEL": "WARNING"
+      }
+    },
+    "athlete-analytics": {
+      "command": "/usr/local/bin/python3",
+      "args": [
+        "/Users/abedulrahman/Public/projects/mcp/athletic/scripts/run_analytics.py"
+      ],
+      "env": {
+        "ATHLETE_API_BASE_URL": "http://localhost:8000",
+        "ATHLETE_DB_PATH": "/Users/abedulrahman/.athlete/training.db",
+        "LOG_LEVEL": "WARNING"
+      }
+    }
+  }
+}

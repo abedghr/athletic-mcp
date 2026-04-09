@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtualenvs
+venv/
+.venv/
+env/
+ENV/
+
+# Local SQLite databases — never commit data
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+.athlete/
+
+# Logs
+logs/
+*.log
+
+# Environment files — NEVER commit secrets
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test / cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Project-specific local files
+claude_desktop_config_snippet.json.local

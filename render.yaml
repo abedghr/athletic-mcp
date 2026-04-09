@@ -1,0 +1,27 @@
+# Render blueprint for the Athlete Training MCP system.
+# When you connect this repo on Render, it auto-detects this file and offers
+# to create the service. Secret env vars (TURSO_*, MCP_API_KEY) are NOT in
+# this file — set them manually in the Render dashboard after first deploy.
+
+services:
+  - type: web
+    name: athlete-mcp
+    runtime: docker
+    plan: free
+    region: frankfurt
+    autoDeploy: true
+    healthCheckPath: /health
+    dockerfilePath: ./Dockerfile
+
+    envVars:
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ATHLETE_DEV
+        value: "0"
+      # Secrets — set these manually in the Render dashboard:
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: MCP_API_KEY
+        sync: false
