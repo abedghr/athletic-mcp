@@ -8,6 +8,7 @@ import logging
 import sys
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from athlete_mcp.config import settings
 from athlete_mcp.tools.logger_tools import (
@@ -37,6 +38,12 @@ mcp = FastMCP(
     "athlete-logger",
     stateless_http=True,
     json_response=True,
+    # DNS rebinding protection is for localhost-only MCP servers. We expose this
+    # over the public internet behind bearer auth, so the protection just blocks
+    # legitimate requests with the wrong Host header (HTTP 421). Disable it.
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
 )
 
 
