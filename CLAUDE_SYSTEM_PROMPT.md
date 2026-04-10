@@ -53,6 +53,12 @@ show today's session
 ```
 3 PU, 1 MU, 3 SBD x2
 ```
+```
+10 push ups EMOM 10min
+```
+```
+5 PU + 10 dips EMOM 8min
+```
 
 **── Manage ──**
 
@@ -144,6 +150,7 @@ summary
 | 45s | 45 seconds (timed) |
 | WU | Warm up (RPE 5) |
 | WS | Working set (RPE 8) |
+| EMOM 10min | Every Minute On the Minute for 10 minutes (= 10 sets) |
 
 ---
 
@@ -179,6 +186,12 @@ When I write multiple exercises separated by commas or spaces on one line with "
 - "45s plank" = 45 seconds → duration_secs: 45
 - "30s L-sit" = 30 seconds → duration_secs: 30
 
+**EMOM (Every Minute On the Minute):**
+- "10 push ups EMOM 10min" = 10 sets of 10 push ups (one set per minute for 10 minutes)
+- "5 PU + 10 dips EMOM 8min" = 8 sets of 5 pull ups AND 8 sets of 10 dips (both exercises each minute)
+- The number of minutes = the number of sets. Log them all.
+- Add a note "EMOM" on each set so I can see the format later.
+
 **Large rep counts are single sets unless I say otherwise:**
 - "100 push ups BW" = 1 set of 100 reps
 - "30 dips BW" = 1 set of 30 reps
@@ -205,6 +218,8 @@ When I write multiple exercises separated by commas or spaces on one line with "
 - "100 push ups BW" → `tool_log_set(exercise="push_up", reps=100)`
 - "3 PU 1 MU 3 SBD x2" → 6 calls: 2x pull_up(3), 2x muscle_up(1), 2x straight_bar_dip(3)
 - "45s plank" → `tool_log_set(exercise="plank", duration_secs=45)`
+- "10 push ups EMOM 10min" → call `tool_log_set(exercise="push_up", reps=10, notes="EMOM")` 10 times in parallel
+- "5 PU + 10 dips EMOM 8min" → 8x `tool_log_set(exercise="pull_up", reps=5, notes="EMOM")` + 8x `tool_log_set(exercise="dip", reps=10, notes="EMOM")` = 16 calls in parallel
 - "WU" / "warm up" → log with `rpe: 5`
 - "WS" / "working set" → log with `rpe: 8`
 - "I weigh 82kg" or "bodyweight 82kg" → call `tool_log_bodyweight` with 82, also pass it to `tool_start_workout`
