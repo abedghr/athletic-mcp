@@ -7,28 +7,41 @@ from athlete_mcp.api.schemas.analytics import (
     BodyweightEntry,
     BodyweightTrendResponse,
     DaySummary,
+    ExerciseDaySummary,
     ExerciseHistoryResponse,
     ExerciseSessionDetail,
     ExerciseStatsResponse,
     FrequencyItem,
     FrequencyResponse,
+    ImprovingExercise,
+    InsufficientDataExercise,
     PersonalRecordResponse,
     PlateauExercise,
     PlateauResponse,
+    SetDetail,
     VolumeTrendResponse,
+    WeekDeltas,
     WeekStats,
     WeekVolume,
     WeeklySummaryResponse,
+)
+from athlete_mcp.api.utils import (
+    compute_weight_and_volume,
+    get_monday,
+    safe_avg,
+    today_iso,
 )
 
 router = APIRouter()
 
 
-def _get_monday(d: date) -> date:
-    return d - timedelta(days=d.weekday())
+# ---------------------------------------------------------------------------
+# Weekly summary
+# ---------------------------------------------------------------------------
 
-
-async def _week_stats(db, week_start: str, week_end: str) -> tuple[WeekStats, list[DaySummary]]:
+async def _week_stats(
+    db, week_start: str, week_end: str,
+) -> tuple[WeekStats, list[DaySummary]]:
     cursor = await db.execute(
         """SELECT w.date, s.exercise_display_name, s.exercise_name,
                   COUNT(s.id) as set_count,
@@ -45,25 +58,24 @@ async def _week_stats(db, week_start: str, week_end: str) -> tuple[WeekStats, li
     )
     rows = await cursor.fetchall()
 
-    # Build day summaries
-    days_map: dict[str, list] = {}
-    unique_exercises = set()
+    days_map: dict[str, list[ExerciseDaySummary]] = {}
+    unique_exercises: set[str] = set()
     total_sets = 0
     total_reps = 0
     total_volume = 0.0
-    rpe_values = []
+    rpe_values: list[float] = []
 
     for row in rows:
         d = row["date"]
         if d not in days_map:
             days_map[d] = []
-        days_map[d].append({
-            "exercise": row["exercise_display_name"],
-            "sets": row["set_count"],
-            "reps": row["total_reps"],
-            "volume_kg": round(row["volume_kg"] or 0, 2),
-            "avg_rpe": round(row["avg_rpe"], 1) if row["avg_rpe"] else None,
-        })
+        days_map[d].append(ExerciseDaySummary(
+            exercise=row["exercise_display_name"],
+            sets=row["set_count"],
+            reps=row["total_reps"] or 0,
+            volume_kg=round(row["volume_kg"] or 0, 2),
+            avg_rpe=round(row["avg_rpe"], 1) if row["avg_rpe"] else None,
+        ))
         unique_exercises.add(row["exercise_name"])
         total_sets += row["set_count"]
         total_reps += row["total_reps"] or 0
@@ -75,10 +87,10 @@ async def _week_stats(db, week_start: str, week_end: str) -> tuple[WeekStats, li
         DaySummary(
             date=d,
             exercises=exercises,
-            total_sets=sum(e["sets"] for e in exercises),
-            total_reps=sum(e["reps"] for e in exercises),
-            total_volume_kg=round(sum(e["volume_kg"] for e in exercises), 2),
-            avg_rpe=round(sum(r for r in [e["avg_rpe"] for e in exercises] if r) / max(len([e for e in exercises if e["avg_rpe"]]), 1), 1) if any(e["avg_rpe"] for e in exercises) else None,
+            total_sets=sum(e.sets for e in exercises),
+            total_reps=sum(e.reps for e in exercises),
+            total_volume_kg=round(sum(e.volume_kg for e in exercises), 2),
+            avg_rpe=safe_avg([e.avg_rpe for e in exercises if e.avg_rpe is not None]),
         )
         for d, exercises in sorted(days_map.items())
     ]
@@ -89,7 +101,7 @@ async def _week_stats(db, week_start: str, week_end: str) -> tuple[WeekStats, li
         total_reps=total_reps,
         total_volume_kg=round(total_volume, 2),
         unique_exercises=len(unique_exercises),
-        avg_rpe=round(sum(rpe_values) / len(rpe_values), 1) if rpe_values else None,
+        avg_rpe=safe_avg(rpe_values),
     )
     return stats, days
 
@@ -111,26 +123,25 @@ async def get_all_prs(db: DbDep, exercise: str | None = None):
             """SELECT pr.*, e.display_name as exercise_display_name
                FROM personal_records pr
                JOIN exercises e ON e.id = pr.exercise_id
-               ORDER BY pr.exercise_name, pr.pr_type"""
+               ORDER BY pr.exercise_name, pr.pr_type""",
         )
 
     rows = await cursor.fetchall()
     today = date.today()
-    results = []
-    for row in rows:
-        days_since = (today - date.fromisoformat(row["date_achieved"])).days
-        results.append(PersonalRecordResponse(
+    return [
+        PersonalRecordResponse(
             exercise_name=row["exercise_name"],
             exercise_display_name=row["exercise_display_name"],
             pr_type=row["pr_type"],
             value=row["value"],
             date_achieved=row["date_achieved"],
-            days_since_pr=days_since,
+            days_since_pr=(today - date.fromisoformat(row["date_achieved"])).days,
             previous_value=row["previous_value"],
             improvement_pct=row["improvement_pct"],
             set_id=row["set_id"],
-        ))
-    return results
+        )
+        for row in rows
+    ]
 
 
 @router.get("/prs/{exercise}", response_model=list[PersonalRecordResponse])
@@ -141,29 +152,26 @@ async def get_exercise_prs(exercise: str, db: DbDep):
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)
 async def weekly_summary(db: DbDep, week_offset: int = Query(default=0, ge=-52, le=0)):
     today = date.today()
-    target_monday = _get_monday(today + timedelta(weeks=week_offset))
+    target_monday = get_monday(today + timedelta(weeks=week_offset))
     target_sunday = target_monday + timedelta(days=6)
 
     current_stats, days = await _week_stats(
-        db, target_monday.isoformat(), target_sunday.isoformat()
+        db, target_monday.isoformat(), target_sunday.isoformat(),
     )
 
-    # Previous week for comparison
     prev_monday = target_monday - timedelta(weeks=1)
     prev_sunday = prev_monday + timedelta(days=6)
-    prev_stats, _ = await _week_stats(
-        db, prev_monday.isoformat(), prev_sunday.isoformat()
-    )
+    prev_stats, _ = await _week_stats(db, prev_monday.isoformat(), prev_sunday.isoformat())
 
     deltas = None
     if prev_stats.total_sets > 0:
-        deltas = {
-            "sessions": current_stats.total_sessions - prev_stats.total_sessions,
-            "sets": current_stats.total_sets - prev_stats.total_sets,
-            "reps": current_stats.total_reps - prev_stats.total_reps,
-            "volume_kg": round(current_stats.total_volume_kg - prev_stats.total_volume_kg, 2),
-            "exercises": current_stats.unique_exercises - prev_stats.unique_exercises,
-        }
+        deltas = WeekDeltas(
+            sessions=current_stats.total_sessions - prev_stats.total_sessions,
+            sets=current_stats.total_sets - prev_stats.total_sets,
+            reps=current_stats.total_reps - prev_stats.total_reps,
+            volume_kg=round(current_stats.total_volume_kg - prev_stats.total_volume_kg, 2),
+            exercises=current_stats.unique_exercises - prev_stats.unique_exercises,
+        )
 
     return WeeklySummaryResponse(
         week_start=target_monday.isoformat(),
@@ -175,8 +183,14 @@ async def weekly_summary(db: DbDep, week_offset: int = Query(default=0, ge=-52, 
     )
 
 
+# ---------------------------------------------------------------------------
+# Exercise history & stats
+# ---------------------------------------------------------------------------
+
 @router.get("/exercise/{exercise}/history", response_model=ExerciseHistoryResponse)
-async def exercise_history(exercise: str, db: DbDep, limit: int = Query(default=20, ge=1, le=100)):
+async def exercise_history(
+    exercise: str, db: DbDep, limit: int = Query(default=20, ge=1, le=100),
+):
     ex = await resolve_exercise(exercise, db)
 
     cursor = await db.execute(
@@ -189,7 +203,6 @@ async def exercise_history(exercise: str, db: DbDep, limit: int = Query(default=
     )
     rows = await cursor.fetchall()
 
-    # Group by workout
     sessions_map: dict[int, dict] = {}
     for row in rows:
         wid = row["workout_id"]
@@ -199,42 +212,42 @@ async def exercise_history(exercise: str, db: DbDep, limit: int = Query(default=
                 "workout_id": wid,
                 "sets": [],
                 "total_reps": 0,
-                "max_weight_kg": 0,
-                "total_volume_kg": 0,
+                "max_weight_kg": 0.0,
+                "total_volume_kg": 0.0,
                 "rpe_values": [],
             }
         s = sessions_map[wid]
-        bw = row["bodyweight_kg"] or 0
-        added = row["added_weight_kg"] or 0
-        total_w = bw + added if bw else added
-        vol = (row["reps"] * total_w) if (row["reps"] and total_w) else 0
+        total_w, vol = compute_weight_and_volume(
+            row["bodyweight_kg"], row["added_weight_kg"], row["reps"],
+        )
 
-        s["sets"].append({
-            "set_number": row["set_number"],
-            "reps": row["reps"],
-            "duration_secs": row["duration_secs"],
-            "distance_m": row["distance_m"],
-            "added_weight_kg": added,
-            "total_weight_kg": total_w if total_w else None,
-            "rpe": row["rpe"],
-        })
+        s["sets"].append(SetDetail(
+            set_number=row["set_number"],
+            reps=row["reps"],
+            duration_secs=row["duration_secs"],
+            distance_m=row["distance_m"],
+            added_weight_kg=row["added_weight_kg"] or 0,
+            total_weight_kg=total_w,
+            rpe=row["rpe"],
+        ))
         s["total_reps"] += row["reps"] or 0
-        s["max_weight_kg"] = max(s["max_weight_kg"], added)
-        s["total_volume_kg"] += vol
+        s["max_weight_kg"] = max(s["max_weight_kg"], row["added_weight_kg"] or 0)
+        s["total_volume_kg"] += vol or 0
         if row["rpe"]:
             s["rpe_values"].append(row["rpe"])
 
-    sessions = []
-    for s in list(sessions_map.values())[:limit]:
-        sessions.append(ExerciseSessionDetail(
+    sessions = [
+        ExerciseSessionDetail(
             date=s["date"],
             workout_id=s["workout_id"],
             sets=s["sets"],
             total_reps=s["total_reps"],
             max_weight_kg=round(s["max_weight_kg"], 2),
             total_volume_kg=round(s["total_volume_kg"], 2),
-            avg_rpe=round(sum(s["rpe_values"]) / len(s["rpe_values"]), 1) if s["rpe_values"] else None,
-        ))
+            avg_rpe=safe_avg(s["rpe_values"]),
+        )
+        for s in list(sessions_map.values())[:limit]
+    ]
 
     return ExerciseHistoryResponse(
         exercise_name=ex["name"],
@@ -245,7 +258,9 @@ async def exercise_history(exercise: str, db: DbDep, limit: int = Query(default=
 
 
 @router.get("/exercise/{exercise}/stats", response_model=ExerciseStatsResponse)
-async def exercise_stats(exercise: str, db: DbDep, period_days: int = Query(default=30, ge=1, le=365)):
+async def exercise_stats(
+    exercise: str, db: DbDep, period_days: int = Query(default=30, ge=1, le=365),
+):
     ex = await resolve_exercise(exercise, db)
     since = (date.today() - timedelta(days=period_days)).isoformat()
 
@@ -267,46 +282,37 @@ async def exercise_stats(exercise: str, db: DbDep, period_days: int = Query(defa
             period_days=period_days,
         )
 
-    workout_ids = set()
+    workout_ids: set[int] = set()
     total_reps = 0
     total_volume = 0.0
     max_reps = 0
     max_weight = 0.0
-    rpe_values = []
+    rpe_values: list[float] = []
 
     for row in rows:
         workout_ids.add(row["workout_id"])
         reps = row["reps"] or 0
-        added = row["added_weight_kg"] or 0
-        bw = row["bodyweight_kg"] or 0
-        total_w = bw + added if bw else added
-
+        _, vol = compute_weight_and_volume(
+            row["bodyweight_kg"], row["added_weight_kg"], row["reps"],
+        )
         total_reps += reps
-        if reps > max_reps:
-            max_reps = reps
-        if added > max_weight:
-            max_weight = added
-        total_volume += reps * total_w if total_w else 0
+        max_reps = max(max_reps, reps)
+        max_weight = max(max_weight, row["added_weight_kg"] or 0)
+        total_volume += vol or 0
         if row["rpe"]:
             rpe_values.append(row["rpe"])
 
     total_sets = len(rows)
-    avg_reps = round(total_reps / total_sets, 1) if total_sets else None
 
-    # Simple trend: compare first half to second half of sets
+    # Trend: compare first half vs second half of set reps.
     trend = None
     if total_sets >= 4:
         mid = total_sets // 2
-        first_half_reps = sum((r["reps"] or 0) for r in rows[:mid])
-        second_half_reps = sum((r["reps"] or 0) for r in rows[mid:])
-        if first_half_reps > 0:
-            change = ((second_half_reps - first_half_reps) / first_half_reps) * 100
-            if change > 5:
-                trend = "improving"
-            elif change < -5:
-                trend = "declining"
-            else:
-                trend = "stable"
+        first_half = sum((r["reps"] or 0) for r in rows[:mid])
+        second_half = sum((r["reps"] or 0) for r in rows[mid:])
+        if first_half > 0:
+            change = ((second_half - first_half) / first_half) * 100
+            trend = "improving" if change > 5 else ("declining" if change < -5 else "stable")
 
     return ExerciseStatsResponse(
         exercise_name=ex["name"],
@@ -316,13 +322,17 @@ async def exercise_stats(exercise: str, db: DbDep, period_days: int = Query(defa
         total_sets=total_sets,
         total_reps=total_reps,
         total_volume_kg=round(total_volume, 2),
-        max_reps_single_set=max_reps if max_reps else None,
-        max_weight_kg=max_weight if max_weight else None,
-        avg_reps_per_set=avg_reps,
-        avg_rpe=round(sum(rpe_values) / len(rpe_values), 1) if rpe_values else None,
+        max_reps_single_set=max_reps or None,
+        max_weight_kg=max_weight or None,
+        avg_reps_per_set=round(total_reps / total_sets, 1) if total_sets else None,
+        avg_rpe=safe_avg(rpe_values),
         trend=trend,
     )
 
+
+# ---------------------------------------------------------------------------
+# Plateaus
+# ---------------------------------------------------------------------------
 
 @router.get("/plateaus", response_model=PlateauResponse)
 async def detect_plateaus(
@@ -333,11 +343,9 @@ async def detect_plateaus(
     since = (date.today() - timedelta(weeks=window_weeks)).isoformat()
     midpoint = (date.today() - timedelta(weeks=window_weeks // 2)).isoformat()
 
-    # Get all exercises with sessions in the window
     cursor = await db.execute(
         """SELECT s.exercise_id, s.exercise_name, s.exercise_display_name, w.date,
                   MAX(s.reps) as max_reps,
-                  MAX(s.added_weight_kg) as max_weight,
                   SUM(COALESCE(s.reps, 0) * (COALESCE(s.bodyweight_kg, 0) + s.added_weight_kg)) as volume
            FROM sets s
            JOIN workouts w ON w.id = s.workout_id
@@ -348,56 +356,46 @@ async def detect_plateaus(
     )
     rows = await cursor.fetchall()
 
-    # Group by exercise
+    # Group by exercise.
     exercise_sessions: dict[str, list] = {}
-    exercise_meta: dict[str, dict] = {}
+    exercise_meta: dict[str, str] = {}  # name → display_name
     for row in rows:
         name = row["exercise_name"]
         if name not in exercise_sessions:
             exercise_sessions[name] = []
-            exercise_meta[name] = {
-                "display_name": row["exercise_display_name"],
-                "exercise_id": row["exercise_id"],
-            }
+            exercise_meta[name] = row["exercise_display_name"]
         exercise_sessions[name].append(row)
 
-    plateaued = []
-    improving = []
-    insufficient_data = []
+    plateaued: list[PlateauExercise] = []
+    improving: list[ImprovingExercise] = []
+    insufficient_data: list[InsufficientDataExercise] = []
 
     for name, sessions in exercise_sessions.items():
-        meta = exercise_meta[name]
+        display = exercise_meta[name]
+
         if len(sessions) < 4:
-            insufficient_data.append({
-                "exercise_name": name,
-                "exercise_display_name": meta["display_name"],
-                "sessions": len(sessions),
-            })
+            insufficient_data.append(InsufficientDataExercise(
+                exercise_name=name, exercise_display_name=display,
+                sessions=len(sessions),
+            ))
             continue
 
-        # Split into first and second half
         first_half = [s for s in sessions if s["date"] < midpoint]
         second_half = [s for s in sessions if s["date"] >= midpoint]
 
         if not first_half or not second_half:
-            insufficient_data.append({
-                "exercise_name": name,
-                "exercise_display_name": meta["display_name"],
-                "sessions": len(sessions),
-            })
+            insufficient_data.append(InsufficientDataExercise(
+                exercise_name=name, exercise_display_name=display,
+                sessions=len(sessions),
+            ))
             continue
 
-        # Compare average max reps or volume
+        # Compare average max-reps-or-volume between halves.
         first_avg = sum(s["max_reps"] or s["volume"] or 0 for s in first_half) / len(first_half)
         second_avg = sum(s["max_reps"] or s["volume"] or 0 for s in second_half) / len(second_half)
-
-        if first_avg > 0:
-            change_pct = ((second_avg - first_avg) / first_avg) * 100
-        else:
-            change_pct = 0
+        change_pct = ((second_avg - first_avg) / first_avg * 100) if first_avg else 0
 
         if change_pct < threshold_pct:
-            # Determine suggested action
             if window_weeks >= 6:
                 suggested = "deload_week then change_variation"
             elif change_pct < 0:
@@ -406,8 +404,7 @@ async def detect_plateaus(
                 suggested = "add_weight or increase_reps"
 
             plateaued.append(PlateauExercise(
-                exercise_name=name,
-                exercise_display_name=meta["display_name"],
+                exercise_name=name, exercise_display_name=display,
                 sessions_in_window=len(sessions),
                 first_half_avg=round(first_avg, 2),
                 second_half_avg=round(second_avg, 2),
@@ -415,26 +412,26 @@ async def detect_plateaus(
                 suggested_action=suggested,
             ))
         else:
-            improving.append({
-                "exercise_name": name,
-                "exercise_display_name": meta["display_name"],
-                "change_pct": round(change_pct, 1),
-                "sessions": len(sessions),
-            })
+            improving.append(ImprovingExercise(
+                exercise_name=name, exercise_display_name=display,
+                change_pct=round(change_pct, 1), sessions=len(sessions),
+            ))
 
     return PlateauResponse(
-        window_weeks=window_weeks,
-        threshold_pct=threshold_pct,
-        plateaued=plateaued,
-        improving=improving,
+        window_weeks=window_weeks, threshold_pct=threshold_pct,
+        plateaued=plateaued, improving=improving,
         insufficient_data=insufficient_data,
     )
 
 
+# ---------------------------------------------------------------------------
+# Frequency, bodyweight, volume
+# ---------------------------------------------------------------------------
+
 @router.get("/frequency", response_model=FrequencyResponse)
 async def training_frequency(db: DbDep, period_days: int = Query(default=30, ge=1, le=365)):
     since = (date.today() - timedelta(days=period_days)).isoformat()
-    today_str = date.today().isoformat()
+    today_str = today_iso()
 
     cursor = await db.execute(
         """SELECT s.exercise_name, s.exercise_display_name, e.category,
@@ -466,18 +463,12 @@ async def training_frequency(db: DbDep, period_days: int = Query(default=30, ge=
         ))
         by_category[row["category"]] = by_category.get(row["category"], 0) + row["session_count"]
 
-    return FrequencyResponse(
-        period_days=period_days,
-        exercises=exercises,
-        by_category=by_category,
-    )
+    return FrequencyResponse(period_days=period_days, exercises=exercises, by_category=by_category)
 
 
 @router.get("/bodyweight", response_model=BodyweightTrendResponse)
 async def bodyweight_trend(db: DbDep, limit: int = Query(default=30, ge=1, le=365)):
-    cursor = await db.execute(
-        "SELECT * FROM bodyweight_log ORDER BY date DESC LIMIT ?", (limit,)
-    )
+    cursor = await db.execute("SELECT * FROM bodyweight_log ORDER BY date DESC LIMIT ?", (limit,))
     rows = await cursor.fetchall()
 
     if not rows:
@@ -485,31 +476,24 @@ async def bodyweight_trend(db: DbDep, limit: int = Query(default=30, ge=1, le=36
 
     entries = [
         BodyweightEntry(
-            date=row["date"],
-            weight_kg=row["weight_kg"],
-            time_of_day=row["time_of_day"],
-            notes=row["notes"],
+            date=row["date"], weight_kg=row["weight_kg"],
+            time_of_day=row["time_of_day"], notes=row["notes"],
         )
         for row in reversed(rows)
     ]
 
     weights = [e.weight_kg for e in entries]
-    current = weights[-1]
     trend = None
     if len(weights) >= 3:
-        first_third = sum(weights[: len(weights) // 3]) / (len(weights) // 3)
-        last_third = sum(weights[-(len(weights) // 3) :]) / (len(weights) // 3)
-        diff = last_third - first_third
-        if diff > 0.5:
-            trend = "gaining"
-        elif diff < -0.5:
-            trend = "losing"
-        else:
-            trend = "stable"
+        third = len(weights) // 3
+        first_avg = sum(weights[:third]) / third
+        last_avg = sum(weights[-third:]) / third
+        diff = last_avg - first_avg
+        trend = "gaining" if diff > 0.5 else ("losing" if diff < -0.5 else "stable")
 
     return BodyweightTrendResponse(
         entries=entries,
-        current_weight_kg=current,
+        current_weight_kg=weights[-1],
         min_weight_kg=min(weights),
         max_weight_kg=max(weights),
         avg_weight_kg=round(sum(weights) / len(weights), 2),
@@ -525,27 +509,25 @@ async def log_bodyweight(
     time_of_day: str = "morning",
     notes: str | None = None,
 ):
-    log_date = date_str or date.today().isoformat()
-    try:
-        await db.execute(
-            """INSERT INTO bodyweight_log (date, weight_kg, time_of_day, notes)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(date) DO UPDATE SET weight_kg = ?, time_of_day = ?, notes = ?""",
-            (log_date, weight_kg, time_of_day, notes, weight_kg, time_of_day, notes),
-        )
-        await db.commit()
-    except Exception:
+    log_date = date_str or today_iso()
+
+    # Check if entry exists for this date.
+    cursor = await db.execute("SELECT id FROM bodyweight_log WHERE date = ?", (log_date,))
+    existing = await cursor.fetchone()
+
+    if existing:
         await db.execute(
             "UPDATE bodyweight_log SET weight_kg = ?, time_of_day = ?, notes = ? WHERE date = ?",
             (weight_kg, time_of_day, notes, log_date),
         )
-        await db.commit()
+    else:
+        await db.execute(
+            "INSERT INTO bodyweight_log (date, weight_kg, time_of_day, notes) VALUES (?, ?, ?, ?)",
+            (log_date, weight_kg, time_of_day, notes),
+        )
+    await db.commit()
 
-    return {
-        "message": f"Bodyweight logged: {weight_kg}kg on {log_date}",
-        "date": log_date,
-        "weight_kg": weight_kg,
-    }
+    return {"message": f"Bodyweight logged: {weight_kg}kg on {log_date}", "date": log_date, "weight_kg": weight_kg}
 
 
 @router.get("/volume-trend", response_model=VolumeTrendResponse)
@@ -566,11 +548,10 @@ async def volume_trend(db: DbDep, weeks: int = Query(default=8, ge=1, le=52)):
     )
     rows = await cursor.fetchall()
 
-    # Group by week
     weeks_map: dict[str, dict] = {}
     for row in rows:
         d = date.fromisoformat(row["date"])
-        monday = _get_monday(d).isoformat()
+        monday = get_monday(d).isoformat()
         if monday not in weeks_map:
             weeks_map[monday] = {"volume": 0, "sets": 0, "reps": 0}
         weeks_map[monday]["volume"] += row["volume"] or 0
@@ -579,10 +560,8 @@ async def volume_trend(db: DbDep, weeks: int = Query(default=8, ge=1, le=52)):
 
     data = [
         WeekVolume(
-            week_start=ws,
-            total_volume_kg=round(v["volume"], 2),
-            total_sets=v["sets"],
-            total_reps=v["reps"],
+            week_start=ws, total_volume_kg=round(v["volume"], 2),
+            total_sets=v["sets"], total_reps=v["reps"],
         )
         for ws, v in sorted(weeks_map.items())
     ]
@@ -593,11 +572,6 @@ async def volume_trend(db: DbDep, weeks: int = Query(default=8, ge=1, le=52)):
         last = data[-1].total_volume_kg
         if first > 0:
             pct = ((last - first) / first) * 100
-            if pct > 10:
-                trend = "increasing"
-            elif pct < -10:
-                trend = "decreasing"
-            else:
-                trend = "stable"
+            trend = "increasing" if pct > 10 else ("decreasing" if pct < -10 else "stable")
 
     return VolumeTrendResponse(weeks=weeks, data=data, trend=trend)

@@ -1,5 +1,3 @@
-from datetime import date, datetime
-
 from fastapi import APIRouter, HTTPException
 
 from athlete_mcp.api.dependencies import DbDep
@@ -9,6 +7,7 @@ from athlete_mcp.api.schemas.workout import (
     WorkoutUpdate,
     WorkoutWithSets,
 )
+from athlete_mcp.api.utils import build_update, now_utc, set_row_to_dict, today_iso
 
 router = APIRouter()
 
@@ -28,35 +27,9 @@ def _row_to_response(row) -> dict:
     }
 
 
-def _set_to_dict(row) -> dict:
-    bw = row["bodyweight_kg"] or 0
-    added = row["added_weight_kg"] or 0
-    total_weight = bw + added if bw else added if added else None
-    reps = row["reps"]
-    volume = (reps * total_weight) if (reps and total_weight) else None
-
-    return {
-        "id": row["id"],
-        "exercise_name": row["exercise_name"],
-        "exercise_display_name": row["exercise_display_name"],
-        "set_number": row["set_number"],
-        "reps": reps,
-        "duration_secs": row["duration_secs"],
-        "distance_m": row["distance_m"],
-        "bodyweight_kg": row["bodyweight_kg"],
-        "added_weight_kg": added,
-        "total_weight_kg": total_weight,
-        "volume_kg": volume,
-        "rpe": row["rpe"],
-        "notes": row["notes"],
-        "created_at": row["created_at"],
-    }
-
-
 async def _get_workout_with_sets(workout_id: int, db) -> dict:
     cursor = await db.execute(
-        "SELECT * FROM workouts WHERE id = ? AND deleted_at IS NULL",
-        (workout_id,),
+        "SELECT * FROM workouts WHERE id = ? AND deleted_at IS NULL", (workout_id,),
     )
     workout = await cursor.fetchone()
     if not workout:
@@ -68,9 +41,11 @@ async def _get_workout_with_sets(workout_id: int, db) -> dict:
         (workout_id,),
     )
     sets = await cursor.fetchall()
-    set_dicts = [_set_to_dict(s) for s in sets]
+    set_dicts = [set_row_to_dict(s) for s in sets]
 
-    exercises_performed = list(dict.fromkeys(s["exercise_display_name"] for s in set_dicts))
+    exercises_performed = list(dict.fromkeys(
+        s["exercise_display_name"] for s in set_dicts
+    ))
     total_volume = sum(s["volume_kg"] for s in set_dicts if s["volume_kg"])
 
     result = _row_to_response(workout)
@@ -108,7 +83,7 @@ async def list_workouts(
 
 @router.post("", response_model=WorkoutResponse, status_code=201)
 async def create_workout(workout: WorkoutCreate, db: DbDep):
-    workout_date = workout.date or date.today().isoformat()
+    workout_date = workout.date or today_iso()
     cursor = await db.execute(
         """INSERT INTO workouts (date, title, bodyweight_kg, location, notes)
            VALUES (?, ?, ?, ?, ?)""",
@@ -116,25 +91,20 @@ async def create_workout(workout: WorkoutCreate, db: DbDep):
     )
     await db.commit()
 
-    cursor = await db.execute(
-        "SELECT * FROM workouts WHERE id = ?", (cursor.lastrowid,)
-    )
-    row = await cursor.fetchone()
-    return _row_to_response(row)
+    cursor = await db.execute("SELECT * FROM workouts WHERE id = ?", (cursor.lastrowid,))
+    return _row_to_response(await cursor.fetchone())
 
 
 @router.get("/today", response_model=WorkoutWithSets)
 async def get_today(db: DbDep):
-    today = date.today().isoformat()
+    today = today_iso()
     cursor = await db.execute(
-        "SELECT * FROM workouts WHERE date = ? AND deleted_at IS NULL", (today,)
+        "SELECT * FROM workouts WHERE date = ? AND deleted_at IS NULL", (today,),
     )
     row = await cursor.fetchone()
 
     if not row:
-        cursor = await db.execute(
-            "INSERT INTO workouts (date) VALUES (?)", (today,)
-        )
+        cursor = await db.execute("INSERT INTO workouts (date) VALUES (?)", (today,))
         await db.commit()
         workout_id = cursor.lastrowid
     else:
@@ -151,44 +121,35 @@ async def get_workout(workout_id: int, db: DbDep):
 @router.patch("/{workout_id}", response_model=WorkoutResponse)
 async def update_workout(workout_id: int, update: WorkoutUpdate, db: DbDep):
     cursor = await db.execute(
-        "SELECT * FROM workouts WHERE id = ? AND deleted_at IS NULL",
-        (workout_id,),
+        "SELECT * FROM workouts WHERE id = ? AND deleted_at IS NULL", (workout_id,),
     )
-    row = await cursor.fetchone()
-    if not row:
+    if not await cursor.fetchone():
         raise HTTPException(status_code=404, detail="Workout not found")
 
     updates = update.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    updates["updated_at"] = datetime.utcnow().isoformat()
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [workout_id]
-
-    await db.execute(f"UPDATE workouts SET {set_clause} WHERE id = ?", values)
+    sql, params = build_update("workouts", updates, workout_id)
+    await db.execute(sql, params)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM workouts WHERE id = ?", (workout_id,))
-    row = await cursor.fetchone()
-    return _row_to_response(row)
+    return _row_to_response(await cursor.fetchone())
 
 
 @router.delete("/{workout_id}", status_code=204)
 async def delete_workout(workout_id: int, db: DbDep):
     cursor = await db.execute(
-        "SELECT * FROM workouts WHERE id = ? AND deleted_at IS NULL",
-        (workout_id,),
+        "SELECT * FROM workouts WHERE id = ? AND deleted_at IS NULL", (workout_id,),
     )
     if not await cursor.fetchone():
         raise HTTPException(status_code=404, detail="Workout not found")
 
-    now = datetime.utcnow().isoformat()
-    await db.execute(
-        "UPDATE workouts SET deleted_at = ? WHERE id = ?", (now, workout_id)
-    )
+    ts = now_utc()
+    await db.execute("UPDATE workouts SET deleted_at = ? WHERE id = ?", (ts, workout_id))
     await db.execute(
         "UPDATE sets SET deleted_at = ? WHERE workout_id = ? AND deleted_at IS NULL",
-        (now, workout_id),
+        (ts, workout_id),
     )
     await db.commit()

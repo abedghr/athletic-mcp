@@ -14,9 +14,20 @@ class PersonalRecordResponse(BaseModel):
     set_id: Optional[int] = None
 
 
+# --- Weekly summary ---
+
+class ExerciseDaySummary(BaseModel):
+    """One exercise's aggregate within a single day."""
+    exercise: str
+    sets: int
+    reps: int
+    volume_kg: float
+    avg_rpe: Optional[float] = None
+
+
 class DaySummary(BaseModel):
     date: str
-    exercises: list[dict] = Field(default_factory=list)
+    exercises: list[ExerciseDaySummary] = Field(default_factory=list)
     total_sets: int = 0
     total_reps: int = 0
     total_volume_kg: float = 0
@@ -32,19 +43,40 @@ class WeekStats(BaseModel):
     avg_rpe: Optional[float] = None
 
 
+class WeekDeltas(BaseModel):
+    sessions: int = 0
+    sets: int = 0
+    reps: int = 0
+    volume_kg: float = 0
+    exercises: int = 0
+
+
 class WeeklySummaryResponse(BaseModel):
     week_start: str
     week_end: str
     current_week: WeekStats
     previous_week: Optional[WeekStats] = None
     days: list[DaySummary] = Field(default_factory=list)
-    deltas: Optional[dict] = None
+    deltas: Optional[WeekDeltas] = None
+
+
+# --- Exercise history ---
+
+class SetDetail(BaseModel):
+    """A single set within a session detail view."""
+    set_number: int
+    reps: Optional[int] = None
+    duration_secs: Optional[int] = None
+    distance_m: Optional[float] = None
+    added_weight_kg: float = 0
+    total_weight_kg: Optional[float] = None
+    rpe: Optional[float] = None
 
 
 class ExerciseSessionDetail(BaseModel):
     date: str
     workout_id: int
-    sets: list[dict] = Field(default_factory=list)
+    sets: list[SetDetail] = Field(default_factory=list)
     total_reps: int = 0
     max_weight_kg: float = 0
     total_volume_kg: float = 0
@@ -57,6 +89,8 @@ class ExerciseHistoryResponse(BaseModel):
     sessions: list[ExerciseSessionDetail] = Field(default_factory=list)
     total_sessions: int = 0
 
+
+# --- Exercise stats ---
 
 class ExerciseStatsResponse(BaseModel):
     exercise_name: str
@@ -73,6 +107,8 @@ class ExerciseStatsResponse(BaseModel):
     trend: Optional[str] = None
 
 
+# --- Plateaus ---
+
 class PlateauExercise(BaseModel):
     exercise_name: str
     exercise_display_name: str
@@ -83,13 +119,28 @@ class PlateauExercise(BaseModel):
     suggested_action: str
 
 
+class ImprovingExercise(BaseModel):
+    exercise_name: str
+    exercise_display_name: str
+    change_pct: float
+    sessions: int
+
+
+class InsufficientDataExercise(BaseModel):
+    exercise_name: str
+    exercise_display_name: str
+    sessions: int
+
+
 class PlateauResponse(BaseModel):
     window_weeks: int
     threshold_pct: float
     plateaued: list[PlateauExercise] = Field(default_factory=list)
-    improving: list[dict] = Field(default_factory=list)
-    insufficient_data: list[dict] = Field(default_factory=list)
+    improving: list[ImprovingExercise] = Field(default_factory=list)
+    insufficient_data: list[InsufficientDataExercise] = Field(default_factory=list)
 
+
+# --- Frequency ---
 
 class FrequencyItem(BaseModel):
     exercise_name: str
@@ -107,6 +158,8 @@ class FrequencyResponse(BaseModel):
     by_category: dict[str, int] = Field(default_factory=dict)
 
 
+# --- Bodyweight ---
+
 class BodyweightEntry(BaseModel):
     date: str
     weight_kg: float
@@ -122,6 +175,8 @@ class BodyweightTrendResponse(BaseModel):
     avg_weight_kg: Optional[float] = None
     trend: Optional[str] = None
 
+
+# --- Volume trend ---
 
 class WeekVolume(BaseModel):
     week_start: str

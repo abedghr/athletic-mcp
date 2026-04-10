@@ -1,5 +1,4 @@
-import difflib
-from datetime import datetime
+from difflib import SequenceMatcher
 
 from fastapi import APIRouter, HTTPException
 
@@ -10,6 +9,7 @@ from athlete_mcp.api.schemas.exercise import (
     ExerciseSearchResult,
     ExerciseUpdate,
 )
+from athlete_mcp.api.utils import build_update, now_utc
 
 router = APIRouter()
 
@@ -59,63 +59,50 @@ async def list_exercises(
 
 @router.post("", response_model=ExerciseResponse, status_code=201)
 async def create_exercise(exercise: ExerciseCreate, db: DbDep):
-    try:
-        cursor = await db.execute(
-            """INSERT INTO exercises (name, display_name, category, muscle_groups, equipment,
-               tracking_type, is_weighted, weight_unit, description)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                exercise.name,
-                exercise.display_name,
-                exercise.category,
-                exercise.muscle_groups,
-                exercise.equipment,
-                exercise.tracking_type,
-                exercise.is_weighted,
-                exercise.weight_unit,
-                exercise.description,
-            ),
+    # Check uniqueness explicitly — avoids fragile string-matching on exceptions.
+    cursor = await db.execute(
+        "SELECT id FROM exercises WHERE name = ? AND deleted_at IS NULL",
+        (exercise.name,),
+    )
+    if await cursor.fetchone():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "EXERCISE_EXISTS",
+                "message": f"Exercise '{exercise.name}' already exists",
+            },
         )
-        await db.commit()
-        new_id = cursor.lastrowid
-    except Exception as e:
-        if "UNIQUE" in str(e):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "EXERCISE_EXISTS",
-                    "message": f"Exercise '{exercise.name}' already exists",
-                },
-            )
-        raise
 
     cursor = await db.execute(
-        "SELECT * FROM exercises WHERE id = ?", (new_id,)
+        """INSERT INTO exercises (name, display_name, category, muscle_groups, equipment,
+           tracking_type, is_weighted, weight_unit, description)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            exercise.name, exercise.display_name, exercise.category,
+            exercise.muscle_groups, exercise.equipment, exercise.tracking_type,
+            exercise.is_weighted, exercise.weight_unit, exercise.description,
+        ),
     )
-    row = await cursor.fetchone()
-    return _row_to_response(row)
+    await db.commit()
+
+    cursor = await db.execute("SELECT * FROM exercises WHERE id = ?", (cursor.lastrowid,))
+    return _row_to_response(await cursor.fetchone())
 
 
 @router.get("/search/{query}", response_model=list[ExerciseSearchResult])
 async def search_exercises(query: str, db: DbDep):
-    cursor = await db.execute(
-        "SELECT * FROM exercises WHERE deleted_at IS NULL"
-    )
+    """Search exercises by name. Uses the same scoring algorithm as resolve_exercise."""
+    cursor = await db.execute("SELECT * FROM exercises WHERE deleted_at IS NULL")
     all_exercises = await cursor.fetchall()
 
     normalized = query.strip().lower()
     results = []
 
     for ex in all_exercises:
-        slug_score = difflib.SequenceMatcher(
-            None, normalized, ex["name"]
-        ).ratio()
-        display_score = difflib.SequenceMatcher(
-            None, normalized, ex["display_name"].lower()
-        ).ratio()
+        slug_score = SequenceMatcher(None, normalized, ex["name"]).ratio()
+        display_score = SequenceMatcher(None, normalized, ex["display_name"].lower()).ratio()
         score = max(slug_score, display_score)
 
-        # Boost substring matches
         if normalized in ex["name"] or normalized in ex["display_name"].lower():
             score = max(score, 0.85)
 
@@ -128,8 +115,7 @@ async def search_exercises(query: str, db: DbDep):
 
 @router.get("/{name}", response_model=ExerciseResponse)
 async def get_exercise(name: str, db: DbDep):
-    row = await resolve_exercise(name, db)
-    return _row_to_response(row)
+    return _row_to_response(await resolve_exercise(name, db))
 
 
 @router.patch("/{name}", response_model=ExerciseResponse)
@@ -141,25 +127,18 @@ async def update_exercise(name: str, update: ExerciseUpdate, db: DbDep):
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    updates["updated_at"] = datetime.utcnow().isoformat()
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [exercise_id]
-
-    await db.execute(
-        f"UPDATE exercises SET {set_clause} WHERE id = ?", values
-    )
+    sql, params = build_update("exercises", updates, exercise_id)
+    await db.execute(sql, params)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM exercises WHERE id = ?", (exercise_id,))
-    row = await cursor.fetchone()
-    return _row_to_response(row)
+    return _row_to_response(await cursor.fetchone())
 
 
 @router.delete("/{name}", status_code=204)
 async def delete_exercise(name: str, db: DbDep):
     row = await resolve_exercise(name, db)
     await db.execute(
-        "UPDATE exercises SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (row["id"],),
+        "UPDATE exercises SET deleted_at = ? WHERE id = ?", (now_utc(), row["id"]),
     )
     await db.commit()

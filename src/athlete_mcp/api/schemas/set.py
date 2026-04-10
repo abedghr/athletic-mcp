@@ -3,11 +3,14 @@ from typing import Optional
 
 
 class SetCreate(BaseModel):
-    exercise: str = Field(..., description="Exercise name or display name — will be fuzzy matched")
-    workout_id: Optional[int] = Field(None, description="If omitted, uses today's workout")
-    reps: Optional[int] = Field(None, ge=1, le=10000)
-    duration_secs: Optional[int] = Field(None, ge=1)
-    distance_m: Optional[float] = Field(None, ge=0)
+    exercise: str = Field(
+        ..., min_length=1, max_length=200,
+        description="Exercise name or display name — will be fuzzy matched",
+    )
+    workout_id: Optional[int] = Field(None, ge=1, description="If omitted, uses today's workout")
+    reps: Optional[int] = Field(None, ge=1, le=1000)
+    duration_secs: Optional[int] = Field(None, ge=1, le=86400)
+    distance_m: Optional[float] = Field(None, ge=0, le=100_000)
     bodyweight_kg: Optional[float] = Field(None, ge=20, le=300)
     added_weight_kg: float = Field(default=0, ge=0, le=500)
     rpe: Optional[float] = Field(None, ge=1, le=10)
@@ -21,13 +24,20 @@ class SetCreate(BaseModel):
 
 
 class SetUpdate(BaseModel):
-    reps: Optional[int] = Field(None, ge=1, le=10000)
-    duration_secs: Optional[int] = Field(None, ge=1)
-    distance_m: Optional[float] = Field(None, ge=0)
+    reps: Optional[int] = Field(None, ge=1, le=1000)
+    duration_secs: Optional[int] = Field(None, ge=1, le=86400)
+    distance_m: Optional[float] = Field(None, ge=0, le=100_000)
     bodyweight_kg: Optional[float] = Field(None, ge=20, le=300)
     added_weight_kg: Optional[float] = Field(None, ge=0, le=500)
     rpe: Optional[float] = Field(None, ge=1, le=10)
     notes: Optional[str] = Field(None, max_length=500)
+
+
+class PRInfo(BaseModel):
+    pr_type: str
+    new_value: float
+    old_value: Optional[float] = None
+    improvement_pct: Optional[float] = None
 
 
 class SetResponse(BaseModel):
@@ -46,6 +56,4 @@ class SetResponse(BaseModel):
     rpe: Optional[float] = None
     notes: Optional[str] = None
     created_at: str
-    new_pr: Optional[dict] = None
-
-    model_config = {"from_attributes": True}
+    new_pr: Optional[PRInfo] = None

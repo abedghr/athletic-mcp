@@ -1,6 +1,5 @@
 import json
 import logging
-from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -101,8 +100,3 @@ async def safe_api_call(
 def format_tool_response(result: dict) -> str:
     """Format a tool result dict as a JSON string for MCP."""
     return json.dumps(result, indent=2, default=str)
-
-
-def get_monday(d: date) -> date:
-    """Get the Monday of the week containing date d."""
-    return d - timedelta(days=d.weekday())
