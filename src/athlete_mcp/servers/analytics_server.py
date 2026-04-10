@@ -131,6 +131,34 @@ async def tool_volume_trend(weeks: int = 8) -> str:
     return await volume_trend(weeks=weeks)
 
 
+# ---------------------------------------------------------------------------
+# Prompts — show up as /slash commands or suggested actions in Claude UI.
+# ---------------------------------------------------------------------------
+
+@mcp.prompt()
+def weekly_review() -> str:
+    """Compare this week to last week — sessions, volume, PRs."""
+    return "Give me a full weekly review: this week vs last week. Include volume, sets, PRs, and any concerns."
+
+
+@mcp.prompt()
+def check_progress(exercise: str = "pull_up") -> str:
+    """Deep dive into one exercise's progress."""
+    return f"How am I doing on {exercise}? Show me history, stats, and whether I'm plateauing."
+
+
+@mcp.prompt()
+def all_prs() -> str:
+    """See all personal records."""
+    return "Show me all my personal records across every exercise."
+
+
+@mcp.prompt()
+def find_weakness() -> str:
+    """Find training gaps and imbalances."""
+    return "Analyze my training frequency. What muscle groups or categories am I neglecting? What should I train more?"
+
+
 def get_http_app():
     """Return the ASGI app for mounting into FastAPI (stateless HTTP transport)."""
     return mcp.streamable_http_app()

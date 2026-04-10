@@ -208,6 +208,36 @@ async def tool_search_exercise(query: str) -> str:
     return await search_exercise(query=query)
 
 
+# ---------------------------------------------------------------------------
+# Prompts — show up as /slash commands or suggested actions in Claude UI.
+# ---------------------------------------------------------------------------
+
+@mcp.prompt()
+def start_session(bodyweight_kg: float | None = None) -> str:
+    """Start today's training session and see what's already logged."""
+    bw = f" My bodyweight is {bodyweight_kg}kg." if bodyweight_kg else ""
+    return f"Start my workout session.{bw} Show me what's already logged today."
+
+
+@mcp.prompt()
+def log_exercise(exercise: str, sets: int = 1, reps: int = 8, weight_kg: float = 0) -> str:
+    """Quick-log sets for an exercise."""
+    w = f" with {weight_kg}kg added" if weight_kg else ""
+    return f"Log {sets} sets of {exercise}, {reps} reps each{w}."
+
+
+@mcp.prompt()
+def end_session(rating: int = 4) -> str:
+    """Wrap up today's workout with a rating and summary."""
+    return f"Rate today's workout {rating}/5. Show me a full summary of everything I did today."
+
+
+@mcp.prompt()
+def quick_summary() -> str:
+    """See today's session at a glance."""
+    return "Show me today's training session — exercises, sets, volume, PRs."
+
+
 def get_http_app():
     """Return the ASGI app for mounting into FastAPI (stateless HTTP transport)."""
     return mcp.streamable_http_app()
