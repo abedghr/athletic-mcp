@@ -10,6 +10,12 @@ Single source of truth for:
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from fastapi import HTTPException
+
+
+# Maximum age (in days) allowed for a backdated entry without allow_old=True.
+MAX_BACKDATE_DAYS = 90
+
 
 # ---------------------------------------------------------------------------
 # Timestamps — use one strategy everywhere: Python-generated UTC ISO strings.
@@ -28,6 +34,61 @@ def today_iso() -> str:
 def get_monday(d: date) -> date:
     """Monday of the week containing *d*."""
     return d - timedelta(days=d.weekday())
+
+
+def validate_entry_date(date_str: str | None, allow_old: bool = False) -> str:
+    """Validate a user-supplied ISO date for logging.
+
+    Returns the canonical YYYY-MM-DD string. Defaults to today when omitted.
+    Rejects future dates, non-ISO strings, and dates older than 90 days unless
+    *allow_old* is True.
+    """
+    if date_str is None or date_str == "":
+        return today_iso()
+
+    try:
+        parsed = date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "INVALID_DATE",
+                "message": (
+                    f"Invalid date {date_str!r}. Expected ISO format YYYY-MM-DD."
+                ),
+                "suggestions": [],
+            },
+        )
+
+    today = date.today()
+    if parsed > today:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "FUTURE_DATE",
+                "message": (
+                    f"Cannot log on a future date ({date_str}). "
+                    f"Today is {today.isoformat()}."
+                ),
+                "suggestions": [],
+            },
+        )
+
+    age_days = (today - parsed).days
+    if age_days > MAX_BACKDATE_DAYS and not allow_old:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "DATE_TOO_OLD",
+                "message": (
+                    f"Date {date_str} is {age_days} days old "
+                    f"(>{MAX_BACKDATE_DAYS}). Pass allow_old=true to confirm."
+                ),
+                "suggestions": [],
+            },
+        )
+
+    return parsed.isoformat()
 
 
 # ---------------------------------------------------------------------------

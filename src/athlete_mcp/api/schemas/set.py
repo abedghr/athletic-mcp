@@ -8,6 +8,15 @@ class SetCreate(BaseModel):
         description="Exercise name or display name — will be fuzzy matched",
     )
     workout_id: Optional[int] = Field(None, ge=1, description="If omitted, uses today's workout")
+    date: Optional[str] = Field(
+        None,
+        description="ISO date (YYYY-MM-DD) the set was performed. Defaults to today. "
+                    "Ignored when workout_id is provided.",
+    )
+    allow_old: bool = Field(
+        default=False,
+        description="Permit dates older than 90 days (safety flag for backlogging).",
+    )
     reps: Optional[int] = Field(None, ge=1, le=1000)
     duration_secs: Optional[int] = Field(None, ge=1, le=86400)
     distance_m: Optional[float] = Field(None, ge=0, le=100_000)

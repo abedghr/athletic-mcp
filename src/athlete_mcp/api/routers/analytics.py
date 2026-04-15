@@ -30,6 +30,7 @@ from athlete_mcp.api.utils import (
     get_monday,
     safe_avg,
     today_iso,
+    validate_entry_date,
 )
 
 router = APIRouter()
@@ -505,11 +506,12 @@ async def bodyweight_trend(db: DbDep, limit: int = Query(default=30, ge=1, le=36
 async def log_bodyweight(
     db: DbDep,
     weight_kg: float = Query(ge=20, le=300),
-    date_str: str | None = None,
+    date_str: str | None = Query(default=None, alias="date"),
     time_of_day: str = "morning",
     notes: str | None = None,
+    allow_old: bool = Query(default=False),
 ):
-    log_date = date_str or today_iso()
+    log_date = validate_entry_date(date_str, allow_old=allow_old)
 
     # Check if entry exists for this date.
     cursor = await db.execute("SELECT id FROM bodyweight_log WHERE date = ?", (log_date,))

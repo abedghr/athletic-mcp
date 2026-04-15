@@ -87,6 +87,18 @@ CREATE INDEX IF NOT EXISTS idx_workouts_date ON workouts(date, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_personal_records_exercise ON personal_records(exercise_id);
 """
 
+# One unique live workout per date so backdated sets always attach to a
+# single session. Partial index ignores soft-deleted rows.
+UNIQUE_WORKOUT_DATE_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workouts_date_unique
+    ON workouts(date) WHERE deleted_at IS NULL;
+"""
+
+MIGRATIONS: list[tuple[int, str, str]] = [
+    (1, "initial_schema", SCHEMA_SQL),
+    (2, "unique_workout_date", UNIQUE_WORKOUT_DATE_SQL),
+]
+
 # (name, display_name, category, tracking_type, is_weighted, equipment)
 DEFAULT_EXERCISES = [
     # Calisthenics — Pull
@@ -124,40 +136,38 @@ DEFAULT_EXERCISES = [
 ]
 
 
-async def run_migrations(db) -> None:
-    # Check if we already applied the initial migration. If schema_migrations
-    # doesn't exist yet, the SELECT will raise — we catch broadly because
-    # different drivers raise different exception types.
+async def _applied_versions(db) -> set[int]:
     try:
-        cursor = await db.execute(
-            "SELECT version FROM schema_migrations WHERE version = 1"
-        )
-        row = await cursor.fetchone()
-        if row is not None:
-            logger.info("Migrations already applied")
-            return
+        cursor = await db.execute("SELECT version FROM schema_migrations")
+        rows = await cursor.fetchall()
     except Exception:
-        # schema_migrations table doesn't exist yet — proceed
-        pass
+        return set()
+    return {row["version"] for row in rows}
 
-    logger.info("Running initial migration...")
-    await db.executescript(SCHEMA_SQL)
 
-    # Record migration
-    await db.execute(
-        "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (1, 'initial_schema')"
-    )
+async def run_migrations(db) -> None:
+    applied = await _applied_versions(db)
 
-    # Seed exercises if table is empty
-    cursor = await db.execute("SELECT COUNT(*) FROM exercises")
-    row = await cursor.fetchone()
-    if row[0] == 0:
-        logger.info("Seeding %d default exercises", len(DEFAULT_EXERCISES))
-        await db.executemany(
-            "INSERT INTO exercises (name, display_name, category, tracking_type, is_weighted, equipment) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            DEFAULT_EXERCISES,
+    for version, name, sql in MIGRATIONS:
+        if version in applied:
+            continue
+        logger.info("Running migration %d: %s", version, name)
+        await db.executescript(sql)
+        await db.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (?, ?)",
+            (version, name),
         )
+
+        if version == 1:
+            cursor = await db.execute("SELECT COUNT(*) FROM exercises")
+            row = await cursor.fetchone()
+            if row[0] == 0:
+                logger.info("Seeding %d default exercises", len(DEFAULT_EXERCISES))
+                await db.executemany(
+                    "INSERT INTO exercises (name, display_name, category, tracking_type, is_weighted, equipment) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    DEFAULT_EXERCISES,
+                )
 
     await db.commit()
-    logger.info("Initial migration complete")
+    logger.info("Migrations complete")

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from athlete_mcp.api.dependencies import DbDep
 from athlete_mcp.api.schemas.workout import (
@@ -7,7 +7,13 @@ from athlete_mcp.api.schemas.workout import (
     WorkoutUpdate,
     WorkoutWithSets,
 )
-from athlete_mcp.api.utils import build_update, now_utc, set_row_to_dict, today_iso
+from athlete_mcp.api.utils import (
+    build_update,
+    now_utc,
+    set_row_to_dict,
+    today_iso,
+    validate_entry_date,
+)
 
 router = APIRouter()
 
@@ -25,6 +31,24 @@ def _row_to_response(row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+async def get_or_create_workout_for_date(db, workout_date: str) -> int:
+    """Return the live workout id for *workout_date*, creating one if absent.
+
+    Caller is responsible for validating *workout_date* (see validate_entry_date).
+    """
+    cursor = await db.execute(
+        "SELECT id FROM workouts WHERE date = ? AND deleted_at IS NULL",
+        (workout_date,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        return row["id"]
+
+    cursor = await db.execute("INSERT INTO workouts (date) VALUES (?)", (workout_date,))
+    await db.commit()
+    return cursor.lastrowid
 
 
 async def _get_workout_with_sets(workout_id: int, db) -> dict:
@@ -82,8 +106,36 @@ async def list_workouts(
 
 
 @router.post("", response_model=WorkoutResponse, status_code=201)
-async def create_workout(workout: WorkoutCreate, db: DbDep):
-    workout_date = workout.date or today_iso()
+async def create_workout(
+    workout: WorkoutCreate,
+    db: DbDep,
+    allow_old: bool = Query(default=False),
+):
+    workout_date = validate_entry_date(workout.date, allow_old=allow_old)
+
+    # Reuse an existing session for the date instead of creating a duplicate.
+    cursor = await db.execute(
+        "SELECT id FROM workouts WHERE date = ? AND deleted_at IS NULL",
+        (workout_date,),
+    )
+    existing = await cursor.fetchone()
+    if existing:
+        updates: dict = {}
+        if workout.title is not None:
+            updates["title"] = workout.title
+        if workout.bodyweight_kg is not None:
+            updates["bodyweight_kg"] = workout.bodyweight_kg
+        if workout.location is not None:
+            updates["location"] = workout.location
+        if workout.notes is not None:
+            updates["notes"] = workout.notes
+        if updates:
+            sql, params = build_update("workouts", updates, existing["id"])
+            await db.execute(sql, params)
+            await db.commit()
+        cursor = await db.execute("SELECT * FROM workouts WHERE id = ?", (existing["id"],))
+        return _row_to_response(await cursor.fetchone())
+
     cursor = await db.execute(
         """INSERT INTO workouts (date, title, bodyweight_kg, location, notes)
            VALUES (?, ?, ?, ?, ?)""",
@@ -97,19 +149,19 @@ async def create_workout(workout: WorkoutCreate, db: DbDep):
 
 @router.get("/today", response_model=WorkoutWithSets)
 async def get_today(db: DbDep):
-    today = today_iso()
-    cursor = await db.execute(
-        "SELECT * FROM workouts WHERE date = ? AND deleted_at IS NULL", (today,),
-    )
-    row = await cursor.fetchone()
+    workout_id = await get_or_create_workout_for_date(db, today_iso())
+    return await _get_workout_with_sets(workout_id, db)
 
-    if not row:
-        cursor = await db.execute("INSERT INTO workouts (date) VALUES (?)", (today,))
-        await db.commit()
-        workout_id = cursor.lastrowid
-    else:
-        workout_id = row["id"]
 
+@router.get("/by-date/{workout_date}", response_model=WorkoutWithSets)
+async def get_by_date(
+    workout_date: str,
+    db: DbDep,
+    allow_old: bool = Query(default=False),
+):
+    """Get or create the workout session for a specific date (YYYY-MM-DD)."""
+    validated = validate_entry_date(workout_date, allow_old=allow_old)
+    workout_id = await get_or_create_workout_for_date(db, validated)
     return await _get_workout_with_sets(workout_id, db)
 
 

@@ -3,8 +3,14 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from athlete_mcp.api.dependencies import DbDep, resolve_exercise
+from athlete_mcp.api.routers.workouts import get_or_create_workout_for_date
 from athlete_mcp.api.schemas.set import PRInfo, SetCreate, SetResponse, SetUpdate
-from athlete_mcp.api.utils import build_update, now_utc, set_row_to_dict, today_iso
+from athlete_mcp.api.utils import (
+    build_update,
+    now_utc,
+    set_row_to_dict,
+    validate_entry_date,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,20 +20,6 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-async def _get_or_create_today(db) -> int:
-    today = today_iso()
-    cursor = await db.execute(
-        "SELECT id FROM workouts WHERE date = ? AND deleted_at IS NULL", (today,),
-    )
-    row = await cursor.fetchone()
-    if row:
-        return row["id"]
-
-    cursor = await db.execute("INSERT INTO workouts (date) VALUES (?)", (today,))
-    await db.commit()
-    return cursor.lastrowid
-
 
 async def _auto_set_number(workout_id: int, exercise_name: str, db) -> int:
     cursor = await db.execute(
@@ -179,7 +171,8 @@ async def log_set(set_data: SetCreate, db: DbDep):
 
     workout_id = set_data.workout_id
     if workout_id is None:
-        workout_id = await _get_or_create_today(db)
+        workout_date = validate_entry_date(set_data.date, allow_old=set_data.allow_old)
+        workout_id = await get_or_create_workout_for_date(db, workout_date)
     else:
         cursor = await db.execute(
             "SELECT id FROM workouts WHERE id = ? AND deleted_at IS NULL", (workout_id,),

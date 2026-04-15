@@ -11,14 +11,16 @@ async def start_workout(
     bodyweight_kg: float | None = None,
     location: str | None = None,
     notes: str | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
-    """Start or retrieve today's training session.
-
-    Creates a new workout session for today, or returns the existing one.
-    Optionally set a title, your bodyweight, location, and notes.
-    """
-    # First try to get today's workout
-    result = await safe_api_call("get", "/workouts/today")
+    """Start or retrieve a training session for a given date (defaults to today)."""
+    if date:
+        path = f"/workouts/by-date/{date}"
+        params = {"allow_old": "true"} if allow_old else None
+        result = await safe_api_call("get", path, params=params)
+    else:
+        result = await safe_api_call("get", "/workouts/today")
     if result["success"]:
         workout = result["data"]
         # If extra fields provided, update the workout
@@ -57,14 +59,13 @@ async def log_set(
     bodyweight_kg: float | None = None,
     rpe: float | None = None,
     notes: str | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
     """Log a single training set for any exercise.
 
-    Accepts flexible exercise names — will fuzzy-match 'pull ups', 'straight bar', 'toes to bar', etc.
-    Automatically links to today's workout session (creates one if none exists).
-    For weighted exercises, provide added_weight_kg (external weight only — bodyweight is tracked separately).
-    For timed exercises like plank or L-sit, provide duration_secs instead of reps.
-    Returns confirmation and alerts if a personal record was broken.
+    Attaches to the workout session for *date* (defaults to today, creating the
+    session on first set). Use *date* (YYYY-MM-DD) to backlog past workouts.
     """
     payload: dict = {"exercise": exercise, "added_weight_kg": added_weight_kg}
     if reps is not None:
@@ -79,6 +80,10 @@ async def log_set(
         payload["rpe"] = rpe
     if notes is not None:
         payload["notes"] = notes
+    if date is not None:
+        payload["date"] = date
+    if allow_old:
+        payload["allow_old"] = True
 
     result = await safe_api_call("post", "/sets", json=payload)
     if not result["success"]:
@@ -113,32 +118,43 @@ async def log_bodyweight(
     weight_kg: float,
     time_of_day: str = "morning",
     notes: str | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
-    """Log today's bodyweight measurement.
+    """Log a bodyweight measurement.
 
-    Tracks bodyweight independently of workouts. Useful for monitoring weight trends.
+    Defaults to today. Pass *date* (YYYY-MM-DD) to backlog a prior measurement.
     time_of_day can be 'morning', 'evening', or 'post_workout'.
     """
-    params = {"weight_kg": weight_kg, "time_of_day": time_of_day}
+    params: dict = {"weight_kg": weight_kg, "time_of_day": time_of_day}
     if notes:
         params["notes"] = notes
+    if date:
+        params["date"] = date
+    if allow_old:
+        params["allow_old"] = "true"
     result = await safe_api_call("post", "/analytics/bodyweight", params=params)
     if result["success"]:
+        log_date = result["data"].get("date", "today")
         return format_tool_response({
             "success": True,
             "data": result["data"],
-            "message": f"Bodyweight logged: {weight_kg}kg ({time_of_day}).",
+            "message": f"Bodyweight logged: {weight_kg}kg ({time_of_day}) on {log_date}.",
         })
     return format_tool_response(result)
 
 
-async def get_today() -> str:
-    """Get a full summary of today's training session.
+async def get_today(date: str | None = None, allow_old: bool = False) -> str:
+    """Get a full summary of a training session.
 
-    Shows all sets logged today, exercises performed, total volume, and session details.
-    Creates a workout session for today if one doesn't exist yet.
+    Defaults to today. Pass *date* (YYYY-MM-DD) to see a backdated session.
+    Creates the session if it doesn't exist yet.
     """
-    result = await safe_api_call("get", "/workouts/today")
+    if date:
+        params = {"allow_old": "true"} if allow_old else None
+        result = await safe_api_call("get", f"/workouts/by-date/{date}", params=params)
+    else:
+        result = await safe_api_call("get", "/workouts/today")
     if not result["success"]:
         return format_tool_response(result)
 
@@ -147,12 +163,12 @@ async def get_today() -> str:
     exercises = data.get("exercises_performed", [])
 
     if total == 0:
-        msg = f"Today's session ({data['date']}): No sets logged yet."
+        msg = f"Session for {data['date']}: No sets logged yet."
     else:
         ex_list = ", ".join(exercises)
         vol = data.get("total_volume_kg")
         vol_str = f", total volume: {vol}kg" if vol else ""
-        msg = f"Today's session ({data['date']}): {total} sets across {len(exercises)} exercises ({ex_list}){vol_str}."
+        msg = f"Session for {data['date']}: {total} sets across {len(exercises)} exercises ({ex_list}){vol_str}."
 
     return format_tool_response({"success": True, "data": data, "message": msg})
 
@@ -294,18 +310,19 @@ async def rate_workout(
     rating: int,
     notes: str | None = None,
     duration_mins: int | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
-    """Rate today's training session on a 1-5 scale.
+    """Rate a training session on a 1-5 scale (defaults to today)."""
+    if date:
+        params = {"allow_old": "true"} if allow_old else None
+        session_result = await safe_api_call("get", f"/workouts/by-date/{date}", params=params)
+    else:
+        session_result = await safe_api_call("get", "/workouts/today")
+    if not session_result["success"]:
+        return format_tool_response(session_result)
 
-    1 = terrible, 2 = poor, 3 = average, 4 = good, 5 = excellent.
-    Optionally add notes and total session duration in minutes.
-    """
-    # Get today's workout ID first
-    today_result = await safe_api_call("get", "/workouts/today")
-    if not today_result["success"]:
-        return format_tool_response(today_result)
-
-    workout_id = today_result["data"]["id"]
+    workout_id = session_result["data"]["id"]
     payload: dict = {"rating": rating}
     if notes:
         payload["notes"] = notes
@@ -316,10 +333,11 @@ async def rate_workout(
     if result["success"]:
         labels = {1: "terrible", 2: "poor", 3: "average", 4: "good", 5: "excellent"}
         label = labels.get(rating, str(rating))
+        session_date = result["data"].get("date", "today")
         return format_tool_response({
             "success": True,
             "data": result["data"],
-            "message": f"Today's workout rated {rating}/5 ({label}).",
+            "message": f"Session on {session_date} rated {rating}/5 ({label}).",
         })
     return format_tool_response(result)
 

@@ -53,13 +53,22 @@ async def tool_start_workout(
     bodyweight_kg: float | None = None,
     location: str | None = None,
     notes: str | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
-    """Start or retrieve today's training session.
+    """Start or retrieve a training session.
 
-    Creates a new workout for today or returns the existing one.
-    Optionally set a session title, your bodyweight, gym location, and notes.
+    Creates a new workout or returns the existing one. Optionally set a title,
+    bodyweight, gym location, and notes.
+
+    date (optional, ISO YYYY-MM-DD): The date the session was performed.
+    Defaults to today. Use this to backlog past sessions.
+    allow_old (optional): Set to true to accept a date older than 90 days.
     """
-    return await start_workout(title=title, bodyweight_kg=bodyweight_kg, location=location, notes=notes)
+    return await start_workout(
+        title=title, bodyweight_kg=bodyweight_kg, location=location,
+        notes=notes, date=date, allow_old=allow_old,
+    )
 
 
 @mcp.tool()
@@ -72,19 +81,26 @@ async def tool_log_set(
     bodyweight_kg: float | None = None,
     rpe: float | None = None,
     notes: str | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
     """Log a single training set for any exercise.
 
-    Accepts flexible exercise names — will fuzzy-match 'pull ups', 'straight bar', 'toes to bar', etc.
-    Automatically links to today's workout session (creates one if none exists).
-    For weighted exercises, provide added_weight_kg (external weight only — bodyweight tracked separately).
+    Accepts flexible exercise names — fuzzy-matches 'pull ups', 'straight bar', etc.
+    For weighted exercises, provide added_weight_kg (external weight only).
     For timed exercises like plank or L-sit, provide duration_secs instead of reps.
     Returns confirmation and alerts if a personal record was broken.
+
+    date (optional, ISO YYYY-MM-DD): The date this set was performed. Defaults
+    to today. Use this to backlog past sessions — the set attaches to (or
+    creates) the workout for that date.
+    allow_old (optional): Set to true to accept a date older than 90 days.
     """
     return await log_set(
         exercise=exercise, reps=reps, duration_secs=duration_secs,
         distance_m=distance_m, added_weight_kg=added_weight_kg,
         bodyweight_kg=bodyweight_kg, rpe=rpe, notes=notes,
+        date=date, allow_old=allow_old,
     )
 
 
@@ -93,23 +109,36 @@ async def tool_log_bodyweight(
     weight_kg: float,
     time_of_day: str = "morning",
     notes: str | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
-    """Log today's bodyweight measurement.
+    """Log a bodyweight measurement.
 
     Tracks bodyweight independently of workouts for monitoring weight trends.
     time_of_day: 'morning', 'evening', or 'post_workout'.
+
+    date (optional, ISO YYYY-MM-DD): The date the measurement was taken.
+    Defaults to today. Use this to backlog past measurements.
+    allow_old (optional): Set to true to accept a date older than 90 days.
     """
-    return await log_bodyweight(weight_kg=weight_kg, time_of_day=time_of_day, notes=notes)
+    return await log_bodyweight(
+        weight_kg=weight_kg, time_of_day=time_of_day, notes=notes,
+        date=date, allow_old=allow_old,
+    )
 
 
 @mcp.tool()
-async def tool_get_today() -> str:
-    """Get a full summary of today's training session.
+async def tool_get_today(date: str | None = None, allow_old: bool = False) -> str:
+    """Get a full summary of a training session.
 
-    Shows all sets logged today, exercises performed, total volume, and session details.
-    Creates a workout for today if one doesn't exist yet.
+    Shows all sets, exercises performed, total volume, and session details.
+    Creates the session if it doesn't exist yet.
+
+    date (optional, ISO YYYY-MM-DD): The date of the session to view. Defaults
+    to today. Use this to inspect a backdated session.
+    allow_old (optional): Set to true to accept a date older than 90 days.
     """
-    return await get_today()
+    return await get_today(date=date, allow_old=allow_old)
 
 
 @mcp.tool()
@@ -189,13 +218,22 @@ async def tool_rate_workout(
     rating: int,
     notes: str | None = None,
     duration_mins: int | None = None,
+    date: str | None = None,
+    allow_old: bool = False,
 ) -> str:
-    """Rate today's training session on a 1-5 scale.
+    """Rate a training session on a 1-5 scale.
 
     1 = terrible, 2 = poor, 3 = average, 4 = good, 5 = excellent.
     Optionally add notes about how the session felt and total duration in minutes.
+
+    date (optional, ISO YYYY-MM-DD): The date of the session to rate. Defaults
+    to today. Use this to rate a backdated session.
+    allow_old (optional): Set to true to accept a date older than 90 days.
     """
-    return await rate_workout(rating=rating, notes=notes, duration_mins=duration_mins)
+    return await rate_workout(
+        rating=rating, notes=notes, duration_mins=duration_mins,
+        date=date, allow_old=allow_old,
+    )
 
 
 @mcp.tool()
